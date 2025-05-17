@@ -61,4 +61,4 @@ async def api_base64(request: Request):
     return JSONResponse(content={'result': text, 'status': '1'})
 
 if __name__ == '__main__':
-    uvicorn.run("main:app", host="0.0.0.0", port=5052, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=5050, reload=False)
