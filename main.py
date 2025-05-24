@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from fastapi import Request, HTTPException
 import uvicorn
 import base64
 import numpy as np
@@ -103,47 +104,40 @@ def merge_gif_preserve_color(base64_gif_str):
     merged = np.minimum.reduce(frames)
     return merged
 
-def is_key_allowed(key: str):
-    now = datetime.now()
-    with lock:
-        if key not in valid_keys:
-            return False, "Invalid key"
+def is_key_allowed(api_key: str) -> bool:
+    if api_key not in valid_keys:
+        return False
 
-        # تنظيف الاستخدامات القديمة
-        recent_times = [t for t in valid_keys[key] if now - t < TIME_WINDOW]
-        valid_keys[key] = recent_times
+    now = datetime.utcnow()
+    window_start = now - timedelta(hours=3)
 
-        if len(recent_times) >= RATE_LIMIT:
-            return False, "Rate limit exceeded. Try again later."
+    # حذف السجلات الأقدم من 3 ساعات
+    valid_keys[api_key] = [dt for dt in valid_keys[api_key] if dt > window_start]
 
-        # تسجيل الاستخدام الجديد
-        valid_keys[key].append(now)
-    return True, None
+    if len(valid_keys[api_key]) >= 3:
+        return False
+
+    # أضف محاولة جديدة
+    valid_keys[api_key].append(now)
+    return True
 
 @app.post('/send_api')
 async def api_base64(request: Request):
     req = await request.json()
 
-    api_key = req.get('key')
-    if not api_key:
-        return JSONResponse(content={'status': '0', 'error': 'Missing API key'}, status_code=400)
+    api_key = req.get("key")
+    if not api_key or not is_key_allowed(api_key):
+        raise HTTPException(status_code=403, detail="API key invalid or rate limited (3 requests / 3 hours)")
 
-    allowed, message = is_key_allowed(api_key)
-    if not allowed:
-        return JSONResponse(content={'status': '0', 'error': message}, status_code=403)
-
-    base64_str = req.get('data')
-    if not base64_str:
-        return JSONResponse(content={'status': '0', 'error': 'Missing data'}, status_code=400)
-
+    base64_str = req['data']
     if base64_str.startswith('data:image'):
         base64_str = base64_str.split(',', 1)[1]
-
     cv_img = merge_gif_preserve_color(base64_str)
     loop = asyncio.get_event_loop()
     text = await loop.run_in_executor(executor, Solver.solve_cv2, cv_img)
-    log_event(f"Captcha received and solved by key: {api_key}")
+    log_event(f"Captcha received from key {api_key} and solved.")
     return JSONResponse(content={'result': text, 'status': '1'})
+
 
 if __name__ == '__main__':
     uvicorn.run("main:app", host="0.0.0.0", port=5050, reload=False)
